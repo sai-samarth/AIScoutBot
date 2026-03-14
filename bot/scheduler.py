@@ -3,7 +3,6 @@ from datetime import datetime, timezone, timedelta
 
 import pytz
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
-from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from bot.config import config
@@ -18,18 +17,10 @@ logger = logging.getLogger(__name__)
 def build_scheduler() -> AsyncIOScheduler:
     """
     Build and return a configured (not yet started) AsyncIOScheduler with:
-    - Daily digest jobs from config.schedule.times
     - Frequent alert scan job for Tier 1 (watched orgs) + Tier 2 (trending)
     """
     tz = pytz.timezone(config.schedule.timezone)
     scheduler = AsyncIOScheduler(timezone=tz)
-
-    # Daily digest jobs
-    for time_str in config.schedule.times:
-        hour, minute = time_str.split(":")
-        trigger = CronTrigger(hour=int(hour), minute=int(minute), timezone=tz)
-        scheduler.add_job(scan_and_send, trigger=trigger, id=f"scan_{time_str}", replace_existing=True)
-        logger.info("Scheduled scan_and_send at %s %s", time_str, config.schedule.timezone)
 
     # Frequent alert scan for Tier 1+2
     hf_cfg = config.sources.huggingface
