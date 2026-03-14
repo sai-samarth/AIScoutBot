@@ -4,6 +4,7 @@ import os
 import httpx
 
 from bot.config import config
+from bot.db import track_sent_message
 
 logger = logging.getLogger(__name__)
 
@@ -49,14 +50,35 @@ async def resolve_group_jids(target_names: list[str]) -> list[str]:
     return jids
 
 
-async def send_text(jid: str, text: str) -> None:
-    """POST /send to the gateway. Raises on non-2xx."""
+async def send_text(jid: str, text: str) -> str | None:
+    """POST /send to the gateway. Returns WhatsApp message ID or None."""
     async with httpx.AsyncClient(timeout=SEND_TIMEOUT) as client:
         resp = await client.post(f"{GATEWAY_URL}/send", json={"jid": jid, "text": text})
         resp.raise_for_status()
+        return resp.json().get("messageId")
 
 
-async def deliver_models(texts: list[str], target_groups: list[str]) -> bool:
+async def send_text_with_tracking(
+    jid: str,
+    text: str,
+    model_ids: list[str] | None,
+    message_type: str,
+) -> str | None:
+    """Send a message and track it in the DB for reply detection."""
+    wa_message_id = await send_text(jid, text)
+    if wa_message_id:
+        try:
+            await track_sent_message(wa_message_id, jid, model_ids, message_type)
+        except Exception as exc:
+            logger.warning("Failed to track sent message %s: %s", wa_message_id, exc)
+    return wa_message_id
+
+
+async def deliver_models(
+    texts: list[str],
+    target_groups: list[str],
+    model_ids_per_text: list[list[str]] | None = None,
+) -> bool:
     """
     Resolve groups, send each text as a separate message to each group.
     Returns True if at least one send succeeded.
@@ -69,9 +91,10 @@ async def deliver_models(texts: list[str], target_groups: list[str]) -> bool:
 
     any_success = False
     for jid in jids:
-        for text in texts:
+        for i, text in enumerate(texts):
+            mids = model_ids_per_text[i] if model_ids_per_text else None
             try:
-                await send_text(jid, text)
+                await send_text_with_tracking(jid, text, mids, "digest")
                 any_success = True
             except Exception as exc:
                 logger.error("Failed to deliver message to jid=%s: %s", jid, exc)

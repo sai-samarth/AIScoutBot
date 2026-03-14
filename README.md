@@ -1,27 +1,40 @@
 # AIScoutBot
 
-A self-hosted WhatsApp bot that monitors HuggingFace for important AI model releases and sends immediate alerts to your WhatsApp groups.
+A self-hosted WhatsApp bot that monitors HuggingFace for important AI model releases and sends immediate alerts to your WhatsApp groups. Reply to any alert or @mention the bot to ask questions about models.
 
 ## How it works
 
 The bot uses a two-tier detection system that runs every 15 minutes:
 
 - **Tier 1 — Watched orgs**: Scans a curated list of major AI labs (Meta, Google, Mistral, Qwen, DeepSeek, NVIDIA, etc.) for any new model uploads. Filtered to LLMs, multimodal, image/video/audio generation, and speech models.
-- **Tier 2 — Trending**: Fetches HuggingFace's top trending models, filtered to those created in the last 7 days and excluding derivatives (quantizations, merges, LoRAs). Catches important releases from new or unlisted labs.
+- **Tier 2 — Trending**: Fetches HuggingFace's top trending models, filtered to those created within `trending_creation_days` (default 3) and excluding derivatives (quantizations, merges, LoRAs). Catches important releases from new or unlisted labs.
 
 Models are deduplicated via SQLite — each model is only alerted once.
+
+Each model is sent as a separate WhatsApp message for easy replying.
+
+## Q&A Agent
+
+Reply to any bot message or @mention the bot to ask questions about AI models. The agent has three tools:
+
+- **HuggingFace model lookup** — fetches full metadata (parameters, architecture, license, tags)
+- **Web search** — DuckDuckGo search for benchmarks, comparisons, and news
+- **Webpage fetch** — reads model cards, arXiv abstracts, and linked pages
+
+The agent's WhatsApp JID is auto-discovered at startup — no manual configuration needed.
 
 ## Architecture
 
 Two services communicate over local HTTP:
 
-- **`gateway/`** — Node.js service using [Baileys](https://github.com/whiskeysockets/baileys) to maintain a WhatsApp Web session. Exposes `POST /send` and `GET /groups`.
-- **`bot/`** — Python/FastAPI service that runs the scheduler, scans HuggingFace, deduplicates via SQLite, formats alerts, and delivers them via the gateway.
+- **`gateway/`** — Node.js service using [Baileys](https://github.com/whiskeysockets/baileys) to maintain a WhatsApp Web session. Exposes `POST /send`, `GET /groups`, `GET /me`, `GET /healthz`.
+- **`bot/`** — Python/FastAPI service that runs the scheduler, scans HuggingFace, deduplicates via SQLite, formats alerts, delivers them via the gateway, and handles the Q&A agent.
 
 ## Requirements
 
 - Docker + Docker Compose
 - A spare WhatsApp account/number for the bot
+- An OpenAI-compatible LLM endpoint (for the Q&A agent)
 
 ## Setup
 
@@ -38,15 +51,17 @@ cd AIScoutBot
 cp .env.example .env
 ```
 
-Edit `.env` and add your HuggingFace token (optional but recommended — raises rate limit from 100 to 5000 req/hr):
+Edit `.env`:
 
 ```
+# Optional — raises HuggingFace rate limit from 100 to 5000 req/hr
 HF_TOKEN=hf_your_token_here
+
+# API key for your LLM endpoint (if required)
+LITELLM_API_KEY=your_key_here
 ```
 
-Get a free read-only token at https://huggingface.co/settings/tokens.
-
-Edit `config.yaml` to set your target WhatsApp group and watched orgs:
+Edit `config.yaml`:
 
 ```yaml
 sources:
@@ -56,12 +71,22 @@ sources:
       - google
       - mistralai
       # ... add or remove orgs as needed
-    scan_interval_minutes: 15    # how often to scan
-    trending_lookback_hours: 24  # Tier 1 lookback (Tier 2 uses 7 days)
+    scan_interval_minutes: 15     # how often to scan
+    trending_creation_days: 3     # Tier 2 creation window in days
 
 whatsapp:
   target_groups:
-    - "Your Group Name"          # substring match, case-insensitive
+    - "Your Group Name"           # substring match, case-insensitive
+
+agent:
+  enabled: true
+  max_steps: 5
+  timeout_seconds: 30
+  response_max_chars: 900
+
+litellm:
+  base_url: "https://api.openai.com/v1"   # any OpenAI-compatible endpoint
+  model: "gpt-4o"
 ```
 
 ### 3. Start
@@ -96,10 +121,10 @@ Once linked you'll see `WhatsApp connected` in the logs. The session is persiste
 
 ```bash
 # Normal — only posts models not yet seen
-curl -X POST http://localhost:8000/trigger/alert
+curl -X POST http://localhost:8000/trigger
 
 # Fresh — re-posts already-seen models without updating the DB (for testing)
-curl -X POST "http://localhost:8000/trigger/alert?fresh=true"
+curl -X POST "http://localhost:8000/trigger?fresh=true"
 ```
 
 ### Check which groups the bot can see
@@ -128,9 +153,14 @@ http://localhost:8000/docs
 |-----|-------------|
 | `sources.huggingface.watched_orgs` | HuggingFace org IDs to monitor (Tier 1) |
 | `sources.huggingface.scan_interval_minutes` | How often to run the alert scan (default `15`) |
-| `sources.huggingface.trending_lookback_hours` | Tier 1 lookback window in hours (default `24`). Tier 2 always uses 7 days |
-| `sources.huggingface.pipeline_tags` | Pipeline tags used by the manual `/trigger` endpoint |
-| `sources.huggingface.min_likes` | Minimum likes for the manual `/trigger` endpoint |
+| `sources.huggingface.trending_lookback_hours` | Tier 1 lookback window in hours (default `24`) |
+| `sources.huggingface.trending_creation_days` | Tier 2 creation window in days (default `3`) |
 | `whatsapp.target_groups` | Group name substrings to send alerts to |
+| `agent.enabled` | Enable/disable the Q&A agent (default `true`) |
+| `agent.max_steps` | Max tool-call iterations per agent request (default `5`) |
+| `agent.timeout_seconds` | Agent timeout in seconds (default `30`) |
+| `agent.response_max_chars` | Max response length in characters (default `900`) |
+| `litellm.base_url` | OpenAI-compatible LLM endpoint URL |
+| `litellm.model` | Model ID to use for the agent |
 | `gateway.port` | Port for the gateway HTTP API (default `3001`) |
 | `bot.port` | Port for the bot HTTP API (default `8000`) |

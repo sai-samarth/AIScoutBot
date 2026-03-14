@@ -74,18 +74,21 @@ async function initWhatsApp(app) {
       const quotedMessageId = quoted?.stanzaId || null;
       const quotedText = quoted?.quotedMessage?.conversation ||
         quoted?.quotedMessage?.extendedTextMessage?.text || null;
+      const mentionedJids = quoted?.mentionedJid || [];
 
       logger.info({ jid, sender, text: text.slice(0, 80) }, 'Incoming message');
 
       // Best-effort forward to bot — do not await, do not block
-      axios.post(BOT_INCOMING_URL, { jid, sender, text, quotedMessageId, quotedText })
+      axios.post(BOT_INCOMING_URL, { jid, sender, text, quotedMessageId, quotedText, mentionedJids })
         .catch((err) => logger.warn({ err: err.message }, 'Failed to forward message to bot'));
     }
   });
 
   async function sendMessage(jid, text) {
-    await sock.sendMessage(jid, { text });
-    logger.info({ jid, chars: text.length }, 'Message sent');
+    const result = await sock.sendMessage(jid, { text });
+    const messageId = result?.key?.id || null;
+    logger.info({ jid, chars: text.length, messageId }, 'Message sent');
+    return messageId;
   }
 
   return { sendMessage };

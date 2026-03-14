@@ -16,8 +16,8 @@ function registerRoutes(app) {
     }
 
     try {
-      await app.locals.sendMessage(jid, text);
-      res.json({ ok: true });
+      const messageId = await app.locals.sendMessage(jid, text);
+      res.json({ ok: true, messageId });
     } catch (err) {
       logger.error({ err: err.message, jid }, 'Failed to send message');
       res.status(500).json({ error: err.message });
@@ -42,6 +42,17 @@ function registerRoutes(app) {
       logger.error({ err: err.message }, 'Failed to fetch groups');
       res.status(500).json({ error: err.message });
     }
+  });
+
+  // GET /me — return the bot's own WhatsApp JID
+  app.get('/me', (req, res) => {
+    if (!app.locals.sock?.user) {
+      return res.status(503).json({ error: 'Not connected' });
+    }
+    res.json({
+      jid: app.locals.sock.user.id,
+      lid: app.locals.sock.user.lid || null,
+    });
   });
 
   // GET /healthz — connection status check

@@ -19,3 +19,4 @@ class IncomingMessage(BaseModel):
     text: str
     quotedMessageId: str | None = None
     quotedText: str | None = None
+    mentionedJids: list[str] = []

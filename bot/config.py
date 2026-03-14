@@ -55,9 +55,17 @@ class BotConfig(BaseModel):
     port: int
 
 
+class AgentConfig(BaseModel):
+    enabled: bool = False
+    max_steps: int = 5
+    timeout_seconds: int = 30
+    response_max_chars: int = 900
+
+
 class LiteLLMConfig(BaseModel):
     base_url: str
     model: str
+    api_key: str | None = None
 
 
 class AppConfig(BaseModel):
@@ -67,6 +75,7 @@ class AppConfig(BaseModel):
     gateway: GatewayConfig
     bot: BotConfig
     litellm: LiteLLMConfig
+    agent: AgentConfig = AgentConfig()
 
 
 def load_config(path: str = None) -> AppConfig:

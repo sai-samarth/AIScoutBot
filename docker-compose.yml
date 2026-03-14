@@ -26,6 +26,8 @@ services:
     environment:
       - GATEWAY_URL=http://gateway:3001
       - HF_TOKEN=${HF_TOKEN:-}
+      - BOT_JID=${BOT_JID:-}
+      - LITELLM_API_KEY=${LITELLM_API_KEY:-}
     depends_on:
       - gateway
 

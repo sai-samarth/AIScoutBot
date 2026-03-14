@@ -6,7 +6,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.interval import IntervalTrigger
 
 from bot.config import config
-from bot.db import check_seen, mark_seen_batch
+from bot.db import check_seen, mark_seen_batch, prune_sent_messages
 from bot.formatter import format_model, MAX_MODELS_PER_ALERT
 from bot.sender import deliver_models
 
@@ -36,7 +36,20 @@ def build_scheduler() -> AsyncIOScheduler:
             len(hf_cfg.watched_orgs),
         )
 
+    scheduler.add_job(
+        _prune_sent_messages,
+        IntervalTrigger(hours=24),
+        id="prune_sent_messages",
+        replace_existing=True,
+    )
+
     return scheduler
+
+
+async def _prune_sent_messages() -> None:
+    """Delete sent_messages older than 7 days."""
+    await prune_sent_messages(days=7)
+    logger.info("Pruned sent_messages older than 7 days")
 
 
 async def alert_scan(fresh: bool = False) -> dict:
@@ -83,8 +96,9 @@ async def alert_scan(fresh: bool = False) -> dict:
     logger.info("Alert scan: %d new models to alert on", len(models_to_send))
 
     texts = [format_model(m) for m in models_to_send]
+    model_ids_per_text = [[m.model_id] for m in models_to_send]
 
-    success = await deliver_models(texts, config.whatsapp.target_groups)
+    success = await deliver_models(texts, config.whatsapp.target_groups, model_ids_per_text)
 
     if success and not fresh:
         await mark_seen_batch([m.model_id for m in new_models])
