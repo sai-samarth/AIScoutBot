@@ -41,15 +41,17 @@ def build_scheduler() -> AsyncIOScheduler:
     return scheduler
 
 
-async def alert_scan() -> dict:
+async def alert_scan(fresh: bool = False) -> dict:
     """
     Frequent scan for Tier 1 (watched orgs) and Tier 2 (trending models).
     Sends an immediate WhatsApp alert for any new unseen models.
+
+    fresh=True skips deduplication and does not update the DB.
     """
     hf_cfg = config.sources.huggingface
     now = datetime.now(timezone.utc)
     since = now - timedelta(hours=hf_cfg.trending_lookback_hours)
-    logger.info("Starting alert scan: since=%s", since.isoformat())
+    logger.info("Starting alert scan: since=%s fresh=%s", since.isoformat(), fresh)
 
     from bot.scanner.huggingface import HuggingFaceSource
     source = HuggingFaceSource(hf_cfg)
@@ -64,19 +66,26 @@ async def alert_scan() -> dict:
         logger.debug("Alert scan: no models found")
         return {"status": "no_models"}
 
-    # Deduplicate — check DB for models we've already alerted on
     new_models: list = []
     tier_labels: dict[str, str] = {}
 
-    for m in tier1:
-        if not await check_seen(m.model_id):
+    if fresh:
+        for m in tier1:
             new_models.append(m)
             tier_labels[m.model_id] = f"Watched: {m.author}"
-
-    for m in tier2:
-        if not await check_seen(m.model_id):
+        for m in tier2:
             new_models.append(m)
             tier_labels[m.model_id] = f"Trending — {m.likes:,} likes"
+        logger.info("fresh=True — skipping deduplication, using all %d models", len(new_models))
+    else:
+        for m in tier1:
+            if not await check_seen(m.model_id):
+                new_models.append(m)
+                tier_labels[m.model_id] = f"Watched: {m.author}"
+        for m in tier2:
+            if not await check_seen(m.model_id):
+                new_models.append(m)
+                tier_labels[m.model_id] = f"Trending — {m.likes:,} likes"
 
     if not new_models:
         logger.debug("Alert scan: no new models after deduplication")
@@ -90,13 +99,15 @@ async def alert_scan() -> dict:
 
     success = await deliver_digest(text, config.whatsapp.target_groups)
 
-    if success:
+    if success and not fresh:
         await mark_seen_batch([m.model_id for m in new_models])
         logger.info("Alert sent — %d models marked as seen", len(new_models))
-        return {"status": "alerted", "count": len(new_models)}
+    elif success and fresh:
+        logger.info("fresh=True — skipping mark_seen, DB unchanged")
     else:
         logger.warning("Alert delivery failed — models NOT marked as seen, will retry")
-        return {"status": "delivery_failed"}
+
+    return {"status": "alerted", "count": len(new_models)}
 
 
 async def scan_and_send(fresh: bool = False) -> dict:

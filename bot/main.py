@@ -39,10 +39,10 @@ async def trigger(fresh: bool = Query(default=False, description="Skip seen-mode
 
 
 @app.post("/trigger/alert")
-async def trigger_alert():
-    """Manually trigger a Tier 1+2 alert scan (watched orgs + trending). Useful for testing."""
-    logger.info("Manual alert scan triggered")
-    result = await alert_scan()
+async def trigger_alert(fresh: bool = Query(default=False, description="Skip seen-models check; re-post already-seen models without updating the DB")):
+    """Manually trigger a Tier 1+2 alert scan (watched orgs + trending). Use ?fresh=true to bypass deduplication."""
+    logger.info("Manual alert scan triggered: fresh=%s", fresh)
+    result = await alert_scan(fresh=fresh)
     return result
 
 
