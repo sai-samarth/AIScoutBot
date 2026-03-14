@@ -1,4 +1,4 @@
-from datetime import datetime, timezone
+from datetime import datetime
 from bot.models import ModelResult
 
 MAX_MODELS_PER_DIGEST = 20

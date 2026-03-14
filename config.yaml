@@ -36,8 +36,6 @@ sources:
       - ByteDance-Seed
       - ai21labs
       - ibm-granite
-    # Tier 2: base likes threshold for composite scoring (arxiv, likes, downloads, org)
-    trending_min_likes: 20
     trending_lookback_hours: 24
     # How often to run the Tier 1+2 alert scan (in minutes)
     scan_interval_minutes: 15

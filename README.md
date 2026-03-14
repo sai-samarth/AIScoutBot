@@ -1,13 +1,22 @@
 # AIScoutBot
 
-A self-hosted WhatsApp bot that periodically scans HuggingFace for newly released AI models (LLMs, vision, multimodal, audio/TTS) and posts a formatted digest to your WhatsApp groups.
+A self-hosted WhatsApp bot that monitors HuggingFace for important AI model releases and sends immediate alerts to your WhatsApp groups.
+
+## How it works
+
+The bot uses a two-tier detection system that runs every 15 minutes:
+
+- **Tier 1 — Watched orgs**: Scans a curated list of major AI labs (Meta, Google, Mistral, Qwen, DeepSeek, NVIDIA, etc.) for any new model uploads. Filtered to LLMs, multimodal, image/video/audio generation, and speech models.
+- **Tier 2 — Trending**: Fetches HuggingFace's top trending models, filtered to those created in the last 7 days and excluding derivatives (quantizations, merges, LoRAs). Catches important releases from new or unlisted labs.
+
+Models are deduplicated via SQLite — each model is only alerted once.
 
 ## Architecture
 
 Two services communicate over local HTTP:
 
 - **`gateway/`** — Node.js service using [Baileys](https://github.com/whiskeysockets/baileys) to maintain a WhatsApp Web session. Exposes `POST /send` and `GET /groups`.
-- **`bot/`** — Python/FastAPI service that runs the scheduler, scans HuggingFace, deduplicates via SQLite, formats the digest, and delivers it via the gateway.
+- **`bot/`** — Python/FastAPI service that runs the scheduler, scans HuggingFace, deduplicates via SQLite, formats alerts, and delivers them via the gateway.
 
 ## Requirements
 
@@ -37,17 +46,22 @@ HF_TOKEN=hf_your_token_here
 
 Get a free read-only token at https://huggingface.co/settings/tokens.
 
-Edit `config.yaml` to set your target WhatsApp group name and schedule:
+Edit `config.yaml` to set your target WhatsApp group and watched orgs:
 
 ```yaml
-schedule:
-  times: ["08:00", "20:00"]   # 24h times, sent daily
-  timezone: "Europe/London"
-  scan_lookback_hours: 12
+sources:
+  huggingface:
+    watched_orgs:
+      - meta-llama
+      - google
+      - mistralai
+      # ... add or remove orgs as needed
+    scan_interval_minutes: 15    # how often to scan
+    trending_lookback_hours: 24  # Tier 1 lookback (Tier 2 uses 7 days)
 
 whatsapp:
   target_groups:
-    - "Your Group Name"       # substring match, case-insensitive
+    - "Your Group Name"          # substring match, case-insensitive
 ```
 
 ### 3. Start
@@ -78,14 +92,14 @@ Once linked you'll see `WhatsApp connected` in the logs. The session is persiste
 ./stop.sh              # stop and remove containers
 ```
 
-### Manually trigger a scan
+### Manually trigger an alert scan
 
 ```bash
 # Normal — only posts models not yet seen
-curl -X POST http://localhost:8000/trigger
+curl -X POST http://localhost:8000/trigger/alert
 
 # Fresh — re-posts already-seen models without updating the DB (for testing)
-curl -X POST "http://localhost:8000/trigger?fresh=true"
+curl -X POST "http://localhost:8000/trigger/alert?fresh=true"
 ```
 
 ### Check which groups the bot can see
@@ -112,12 +126,11 @@ http://localhost:8000/docs
 
 | Key | Description |
 |-----|-------------|
-| `schedule.times` | List of `HH:MM` times to run the digest daily |
-| `schedule.timezone` | Timezone for the schedule (e.g. `Europe/London`) |
-| `schedule.scan_lookback_hours` | How far back each scan looks |
-| `sources.huggingface.pipeline_tags` | HuggingFace pipeline tags to scan |
-| `sources.huggingface.min_likes` | Minimum likes to include a model |
-| `whatsapp.target_groups` | Group name substrings to send the digest to |
+| `sources.huggingface.watched_orgs` | HuggingFace org IDs to monitor (Tier 1) |
+| `sources.huggingface.scan_interval_minutes` | How often to run the alert scan (default `15`) |
+| `sources.huggingface.trending_lookback_hours` | Tier 1 lookback window in hours (default `24`). Tier 2 always uses 7 days |
+| `sources.huggingface.pipeline_tags` | Pipeline tags used by the manual `/trigger` endpoint |
+| `sources.huggingface.min_likes` | Minimum likes for the manual `/trigger` endpoint |
+| `whatsapp.target_groups` | Group name substrings to send alerts to |
 | `gateway.port` | Port for the gateway HTTP API (default `3001`) |
 | `bot.port` | Port for the bot HTTP API (default `8000`) |
-

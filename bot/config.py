@@ -33,7 +33,6 @@ class HuggingFaceConfig(BaseModel):
     pipeline_tags: list[str]
     min_likes: int
     watched_orgs: list[str] = []
-    trending_min_likes: int = 50
     trending_lookback_hours: int = 24
     scan_interval_minutes: int = 15
 

@@ -1,7 +1,7 @@
 import asyncio
 import logging
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 
@@ -22,8 +22,6 @@ DERIVATIVE_MARKERS = [
     "exl2", "fp8", "quantized",
 ]
 
-# Composite score threshold for Tier 2 alerting
-TIER2_SCORE_THRESHOLD = 50
 
 # Pipeline tags that represent LLMs, multimodal, and generation models
 # Used to filter Tier 1 watched-org results to important model categories
@@ -67,7 +65,7 @@ class HuggingFaceSource(BaseSource):
         return headers
 
     # -------------------------------------------------------------------------
-    # Daily digest scan (Tier 3 — pipeline_tags, broader)
+    # Manual digest scan (pipeline_tags, used by /trigger endpoint)
     # -------------------------------------------------------------------------
 
     async def scan(self, since: datetime) -> list[ModelResult]:
@@ -144,7 +142,7 @@ class HuggingFaceSource(BaseSource):
         return results
 
     # -------------------------------------------------------------------------
-    # Alert scan (Tier 1 — watched orgs, Tier 2 — trending with scoring)
+    # Alert scan (Tier 1 — watched orgs, Tier 2 — trending)
     # -------------------------------------------------------------------------
 
     async def scan_alert(self, since: datetime) -> tuple[list[ModelResult], list[ModelResult]]:
@@ -168,7 +166,7 @@ class HuggingFaceSource(BaseSource):
                     logger.warning("Tier1 scan failed for org=%s: %s", org, exc)
                 await asyncio.sleep(0.2)
 
-            # Tier 2: trending models from non-watched orgs, composite scored
+            # Tier 2: trending models from non-watched orgs
             try:
                 t2 = await self._scan_trending(since, watched_lower, client)
                 if t2:
@@ -182,10 +180,10 @@ class HuggingFaceSource(BaseSource):
     async def _scan_org(
         self, org: str, since: datetime, client: httpx.AsyncClient
     ) -> list[ModelResult]:
-        """Fetch recent models from a specific org (no min_likes filter)."""
+        """Fetch recently created models from a specific org (no min_likes filter)."""
         params = {
             "author": org,
-            "sort": "lastModified",
+            "sort": "createdAt",
             "direction": -1,
             "limit": 50,
             "full": "true",
@@ -206,12 +204,12 @@ class HuggingFaceSource(BaseSource):
         items: list[dict] = resp.json()
         results = []
         for raw in items:
-            last_modified_str = raw.get("lastModified") or raw.get("updatedAt")
-            if not last_modified_str:
+            created_str = raw.get("createdAt")
+            if not created_str:
                 continue
-            last_modified = datetime.fromisoformat(last_modified_str.replace("Z", "+00:00"))
-            if last_modified < since:
-                break
+            created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+            if created < since:
+                break  # sorted newest-first, safe to stop
             # Only include models in allowed pipeline categories (LLMs, multimodal, gen)
             tag = raw.get("pipeline_tag") or "unknown"
             if tag not in TIER1_ALLOWED_TAGS:
@@ -228,9 +226,9 @@ class HuggingFaceSource(BaseSource):
         client: httpx.AsyncClient,
     ) -> list[ModelResult]:
         """
-        Fetch trending models, filter to recent ones from non-watched orgs,
-        apply composite scoring (arxiv, likes, org account, downloads).
-        Only models scoring >= TIER2_SCORE_THRESHOLD are returned.
+        Fetch trending models from HuggingFace (sorted by their trending score),
+        filtered to models created within last 7 days, not from watched orgs,
+        and not derivative (quantizations, merges, LoRAs).
         """
         params = {
             "sort": "trendingScore",
@@ -252,14 +250,17 @@ class HuggingFaceSource(BaseSource):
             return []
 
         items: list[dict] = resp.json()
+        # Tier 2 uses a wider creation window (7 days) since trending models
+        # are often a few days old before they gain traction
+        tier2_since = since - timedelta(days=6)  # since is already 24h back → total ~7 days
+
         results = []
         for raw in items:
-            # Must have been modified recently
-            last_modified_str = raw.get("lastModified") or raw.get("updatedAt")
-            if not last_modified_str:
+            created_str = raw.get("createdAt")
+            if not created_str:
                 continue
-            last_modified = datetime.fromisoformat(last_modified_str.replace("Z", "+00:00"))
-            if last_modified < since:
+            created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
+            if created < tier2_since:
                 continue  # don't break — trending sort is not time-ordered
 
             # Skip watched orgs (already covered by Tier 1)
@@ -272,24 +273,13 @@ class HuggingFaceSource(BaseSource):
             if self._is_derivative(model_id):
                 continue
 
-            # Composite scoring
-            score = self._compute_score(raw)
-            if score < TIER2_SCORE_THRESHOLD:
-                continue
-
-            likes = raw.get("likes", 0)
-            logger.debug(
-                "Tier2 candidate: %s score=%d likes=%d",
-                model_id, score, likes,
-            )
-
             model = self._parse_model(raw, min_likes=0)
             if model is not None:
                 results.append(model)
         return results
 
     # -------------------------------------------------------------------------
-    # Scoring helpers
+    # Helpers
     # -------------------------------------------------------------------------
 
     @staticmethod
@@ -297,49 +287,6 @@ class HuggingFaceSource(BaseSource):
         """Return True if model name looks like a quantization/merge/finetune."""
         name_lower = model_id.lower()
         return any(marker in name_lower for marker in DERIVATIVE_MARKERS)
-
-    @staticmethod
-    def _compute_score(raw: dict) -> int:
-        """
-        Composite importance score for Tier 2 models.
-        Weights:
-          +40  has arxiv paper reference
-          +30  likes >= 50
-          +15  likes >= 15  (exclusive with the +30 above)
-          +10  org account (author/model format)
-          +10  downloads >= 10 000 in last 30 days
-        Threshold for alert: 50
-        """
-        score = 0
-
-        # ArXiv paper presence — strongest signal
-        card_data = raw.get("cardData") or {}
-        tags = raw.get("tags") or []
-        has_arxiv = (
-            any("arxiv" in str(v).lower() for v in card_data.values() if v)
-            or any("arxiv" in t.lower() for t in tags)
-        )
-        if has_arxiv:
-            score += 40
-
-        # Likes
-        likes = raw.get("likes", 0)
-        if likes >= 50:
-            score += 30
-        elif likes >= 15:
-            score += 15
-
-        # Organization account (slash in modelId)
-        model_id = raw.get("modelId") or raw.get("id", "")
-        if "/" in model_id:
-            score += 10
-
-        # Downloads (30-day)
-        downloads = raw.get("downloads", 0)
-        if downloads >= 10_000:
-            score += 10
-
-        return score
 
     # -------------------------------------------------------------------------
     # Shared parser
