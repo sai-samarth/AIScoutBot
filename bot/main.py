@@ -5,7 +5,7 @@ from fastapi import FastAPI, Query
 
 from bot.db import init_db
 from bot.models import IncomingMessage
-from bot.scheduler import build_scheduler, scan_and_send
+from bot.scheduler import build_scheduler, scan_and_send, alert_scan
 
 logging.basicConfig(
     level=logging.INFO,
@@ -35,6 +35,14 @@ async def trigger(fresh: bool = Query(default=False, description="Skip seen-mode
     """Manually trigger a scan-and-send cycle. Use ?fresh=true to re-post already-seen models (for testing)."""
     logger.info("Manual trigger: fresh=%s", fresh)
     result = await scan_and_send(fresh=fresh)
+    return result
+
+
+@app.post("/trigger/alert")
+async def trigger_alert():
+    """Manually trigger a Tier 1+2 alert scan (watched orgs + trending). Useful for testing."""
+    logger.info("Manual alert scan triggered")
+    result = await alert_scan()
     return result
 
 

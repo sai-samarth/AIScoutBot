@@ -13,6 +13,34 @@ sources:
       - automatic-speech-recognition
       - text-to-speech
     min_likes: 5
+    # Tier 1: scan these orgs every scan_interval_minutes, alert immediately on new models
+    watched_orgs:
+      - meta-llama
+      - google
+      - mistralai
+      - Qwen
+      - deepseek-ai
+      - microsoft
+      - black-forest-labs
+      - MiniMaxAI
+      - stabilityai
+      - 01-ai
+      - THUDM
+      - tiiuae
+      - CohereForAI
+      - nvidia
+      - apple
+      - alibaba-nlp
+      - openai
+      - xai-org
+      - ByteDance-Seed
+      - ai21labs
+      - ibm-granite
+    # Tier 2: base likes threshold for composite scoring (arxiv, likes, downloads, org)
+    trending_min_likes: 20
+    trending_lookback_hours: 24
+    # How often to run the Tier 1+2 alert scan (in minutes)
+    scan_interval_minutes: 15
 
 whatsapp:
   target_groups:

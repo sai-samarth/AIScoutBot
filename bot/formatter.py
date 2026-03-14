@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 from bot.models import ModelResult
 
 MAX_MODELS_PER_DIGEST = 20
@@ -70,3 +70,34 @@ def format_digest(
     lines.append("_Reply to any model name for details_")
 
     return "\n".join(lines)
+
+
+def format_alert(
+    models: list[ModelResult],
+    now: datetime,
+    tier_labels: dict[str, str],
+) -> str:
+    """
+    Compact immediate-alert format for Tier 1/2 models.
+    tier_labels maps model_id -> human label e.g. "Watched: meta-llama" or "Trending".
+    """
+    if not models:
+        return ""
+
+    date_str = now.strftime("%-d %b %Y, %H:%M UTC")
+    lines = [
+        f"*New AI Model Alert* — {date_str}",
+        "",
+    ]
+
+    for m in models:
+        label = tier_labels.get(m.model_id, "")
+        tier_note = f" | _{label}_" if label else ""
+        lines.append(f"• *{m.model_id}*{tier_note}")
+        lines.append(f"  ❤️ {m.likes:,}  {m.pipeline_tag}")
+        lines.append(f"  {m.url}")
+        if m.description:
+            lines.append(f"  _{m.description[:120]}_")
+        lines.append("")
+
+    return "\n".join(lines).rstrip()
