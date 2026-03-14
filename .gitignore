@@ -5,3 +5,4 @@ bot/__pycache__/
 bot/scanner/__pycache__/
 .env
 .env.*
+!.env.example
