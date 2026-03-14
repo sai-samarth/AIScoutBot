@@ -7,48 +7,38 @@ import httpx
 
 from bot.config import HuggingFaceConfig
 from bot.models import ModelResult
-from bot.scanner.base import BaseSource
 
 logger = logging.getLogger(__name__)
 
 HF_API_BASE = "https://huggingface.co/api/models"
-PAGE_SIZE = 100
-MAX_PAGES = 5  # hard ceiling: 500 models max per pipeline_tag per run
 
-# Model-name substrings that indicate quantization / derivative / merge — not original releases
+# Model-name substrings that indicate quantization / derivative / merge
 DERIVATIVE_MARKERS = [
     "gguf", "awq", "gptq", "4bit", "8bit", "bnb",
     "merge", "abliterated", "uncensored", "lora",
     "exl2", "fp8", "quantized",
 ]
 
-
-# Pipeline tags that represent LLMs, multimodal, and generation models
-# Used to filter Tier 1 watched-org results to important model categories
+# Pipeline tags for LLMs, multimodal, and generation models
+# Used to filter Tier 1 watched-org results
 TIER1_ALLOWED_TAGS = {
-    # LLMs
     "text-generation",
-    # Multimodal LLMs
     "image-text-to-text",
     "audio-text-to-text",
     "any-to-any",
-    # Image generation
     "text-to-image",
     "image-to-image",
     "image-text-to-image",
-    # Video generation
     "text-to-video",
     "image-to-video",
-    # Audio / speech generation
     "text-to-speech",
     "text-to-audio",
     "audio-to-audio",
-    # Speech recognition
     "automatic-speech-recognition",
 }
 
 
-class HuggingFaceSource(BaseSource):
+class HuggingFaceSource:
 
     def __init__(self, cfg: HuggingFaceConfig) -> None:
         self._cfg = cfg
@@ -65,83 +55,6 @@ class HuggingFaceSource(BaseSource):
         return headers
 
     # -------------------------------------------------------------------------
-    # Manual digest scan (pipeline_tags, used by /trigger endpoint)
-    # -------------------------------------------------------------------------
-
-    async def scan(self, since: datetime) -> list[ModelResult]:
-        results: list[ModelResult] = []
-
-        async with httpx.AsyncClient(headers=self._make_headers(), timeout=30.0) as client:
-            for tag in self._cfg.pipeline_tags:
-                try:
-                    tag_results = await self._fetch_tag(tag, since, client)
-                    results.extend(tag_results)
-                    logger.info("HuggingFace tag=%s found=%d new models", tag, len(tag_results))
-                except Exception as exc:
-                    logger.warning("HuggingFace scan failed for tag=%s: %s", tag, exc)
-
-        return results
-
-    async def _fetch_tag(
-        self,
-        tag: str,
-        since: datetime,
-        client: httpx.AsyncClient,
-    ) -> list[ModelResult]:
-        results: list[ModelResult] = []
-
-        for page in range(MAX_PAGES):
-            params = {
-                "filter": tag,
-                "sort": "lastModified",
-                "direction": -1,
-                "limit": PAGE_SIZE,
-                "skip": page * PAGE_SIZE,
-                "full": "true",
-            }
-
-            try:
-                resp = await client.get(HF_API_BASE, params=params)
-            except httpx.RequestError as exc:
-                logger.warning("HuggingFace request error page=%d tag=%s: %s", page, tag, exc)
-                break
-
-            if resp.status_code == 429:
-                logger.warning("HuggingFace rate limited (429) on tag=%s page=%d — stopping", tag, page)
-                break
-
-            resp.raise_for_status()
-            items: list[dict] = resp.json()
-
-            if not items:
-                break
-
-            stop_early = False
-            for raw in items:
-                last_modified_str = raw.get("lastModified") or raw.get("updatedAt")
-                if not last_modified_str:
-                    continue
-
-                last_modified = datetime.fromisoformat(
-                    last_modified_str.replace("Z", "+00:00")
-                )
-
-                if last_modified < since:
-                    stop_early = True
-                    break
-
-                model = self._parse_model(raw, self._cfg.min_likes)
-                if model is not None:
-                    results.append(model)
-
-            if stop_early or len(items) < PAGE_SIZE:
-                break
-
-            await asyncio.sleep(0.5)
-
-        return results
-
-    # -------------------------------------------------------------------------
     # Alert scan (Tier 1 — watched orgs, Tier 2 — trending)
     # -------------------------------------------------------------------------
 
@@ -155,7 +68,6 @@ class HuggingFaceSource(BaseSource):
         watched_lower = {org.lower() for org in self._cfg.watched_orgs}
 
         async with httpx.AsyncClient(headers=self._make_headers(), timeout=30.0) as client:
-            # Tier 1: one request per watched org
             for org in self._cfg.watched_orgs:
                 try:
                     org_results = await self._scan_org(org, since, client)
@@ -166,7 +78,6 @@ class HuggingFaceSource(BaseSource):
                     logger.warning("Tier1 scan failed for org=%s: %s", org, exc)
                 await asyncio.sleep(0.2)
 
-            # Tier 2: trending models from non-watched orgs
             try:
                 t2 = await self._scan_trending(since, watched_lower, client)
                 if t2:
@@ -180,7 +91,7 @@ class HuggingFaceSource(BaseSource):
     async def _scan_org(
         self, org: str, since: datetime, client: httpx.AsyncClient
     ) -> list[ModelResult]:
-        """Fetch recently created models from a specific org (no min_likes filter)."""
+        """Fetch recently created models from a watched org, filtered to allowed pipeline tags."""
         params = {
             "author": org,
             "sort": "createdAt",
@@ -210,11 +121,10 @@ class HuggingFaceSource(BaseSource):
             created = datetime.fromisoformat(created_str.replace("Z", "+00:00"))
             if created < since:
                 break  # sorted newest-first, safe to stop
-            # Only include models in allowed pipeline categories (LLMs, multimodal, gen)
             tag = raw.get("pipeline_tag") or "unknown"
             if tag not in TIER1_ALLOWED_TAGS:
                 continue
-            model = self._parse_model(raw, min_likes=0)
+            model = self._parse_model(raw)
             if model is not None:
                 results.append(model)
         return results
@@ -250,9 +160,8 @@ class HuggingFaceSource(BaseSource):
             return []
 
         items: list[dict] = resp.json()
-        # Tier 2 uses a wider creation window (7 days) since trending models
-        # are often a few days old before they gain traction
-        tier2_since = since - timedelta(days=6)  # since is already 24h back → total ~7 days
+        # Creation window: extend back from since by (trending_creation_days - trending_lookback_hours/24) days
+        tier2_since = since - timedelta(days=self._cfg.trending_creation_days - 1)
 
         results = []
         for raw in items:
@@ -263,17 +172,15 @@ class HuggingFaceSource(BaseSource):
             if created < tier2_since:
                 continue  # don't break — trending sort is not time-ordered
 
-            # Skip watched orgs (already covered by Tier 1)
             author = (raw.get("author") or "").lower()
             if author in watched_lower:
                 continue
 
-            # Skip derivative models (quantizations, merges, LoRAs)
             model_id = raw.get("modelId") or raw.get("id", "")
             if self._is_derivative(model_id):
                 continue
 
-            model = self._parse_model(raw, min_likes=0)
+            model = self._parse_model(raw)
             if model is not None:
                 results.append(model)
         return results
@@ -288,18 +195,10 @@ class HuggingFaceSource(BaseSource):
         name_lower = model_id.lower()
         return any(marker in name_lower for marker in DERIVATIVE_MARKERS)
 
-    # -------------------------------------------------------------------------
-    # Shared parser
-    # -------------------------------------------------------------------------
-
-    def _parse_model(self, raw: dict, min_likes: int) -> ModelResult | None:
+    def _parse_model(self, raw: dict) -> ModelResult | None:
         try:
             model_id = raw.get("modelId") or raw.get("id", "")
             if not model_id:
-                return None
-
-            likes = raw.get("likes", 0)
-            if likes < min_likes:
                 return None
 
             last_modified_str = raw.get("lastModified") or raw.get("updatedAt", "")
@@ -321,7 +220,7 @@ class HuggingFaceSource(BaseSource):
             return ModelResult(
                 model_id=model_id,
                 pipeline_tag=pipeline_tag,
-                likes=likes,
+                likes=raw.get("likes", 0),
                 downloads=raw.get("downloads", 0),
                 created_at=created_at,
                 url=url,

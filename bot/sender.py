@@ -56,24 +56,26 @@ async def send_text(jid: str, text: str) -> None:
         resp.raise_for_status()
 
 
-async def deliver_digest(text: str, target_groups: list[str]) -> bool:
+async def deliver_models(texts: list[str], target_groups: list[str]) -> bool:
     """
-    Resolve groups, send digest to each.
+    Resolve groups, send each text as a separate message to each group.
     Returns True if at least one send succeeded.
-    Per-JID failures are logged but do not abort remaining sends.
+    Per-message failures are logged but do not abort remaining sends.
     """
     jids = await resolve_group_jids(target_groups)
     if not jids:
-        logger.warning("No target JIDs resolved — digest not sent")
+        logger.warning("No target JIDs resolved — messages not sent")
         return False
 
     any_success = False
     for jid in jids:
-        try:
-            await send_text(jid, text)
-            logger.info("Digest delivered to jid=%s", jid)
-            any_success = True
-        except Exception as exc:
-            logger.error("Failed to deliver digest to jid=%s: %s", jid, exc)
+        for text in texts:
+            try:
+                await send_text(jid, text)
+                any_success = True
+            except Exception as exc:
+                logger.error("Failed to deliver message to jid=%s: %s", jid, exc)
 
+    if any_success:
+        logger.info("Delivered %d messages to %d JIDs", len(texts), len(jids))
     return any_success

@@ -37,6 +37,8 @@ sources:
       - ai21labs
       - ibm-granite
     trending_lookback_hours: 24
+    # Tier 2: only include models created within this many days
+    trending_creation_days: 3
     # How often to run the Tier 1+2 alert scan (in minutes)
     scan_interval_minutes: 15
 

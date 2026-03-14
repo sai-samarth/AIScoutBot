@@ -34,6 +34,7 @@ class HuggingFaceConfig(BaseModel):
     min_likes: int
     watched_orgs: list[str] = []
     trending_lookback_hours: int = 24
+    trending_creation_days: int = 7
     scan_interval_minutes: int = 15
 
 
