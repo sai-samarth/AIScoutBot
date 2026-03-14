@@ -1,0 +1,16 @@
+{
+  "name": "aiscoutbot-gateway",
+  "version": "1.0.0",
+  "description": "WhatsApp Web gateway for the AI Model Scout bot",
+  "main": "src/index.js",
+  "scripts": {
+    "start": "node src/index.js"
+  },
+  "dependencies": {
+    "@whiskeysockets/baileys": "^6.7.9",
+    "axios": "^1.7.2",
+    "express": "^4.19.2",
+    "pino": "^9.2.0",
+    "qrcode-terminal": "^0.12.0"
+  }
+}

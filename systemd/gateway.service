@@ -1,0 +1,18 @@
+[Unit]
+Description=WhatsApp Scout Gateway
+After=network.target
+
+[Service]
+WorkingDirectory=/opt/AIScoutBot/gateway
+ExecStart=/usr/bin/node src/index.js
+Restart=always
+RestartSec=5
+StandardOutput=journal
+StandardError=journal
+Environment=GATEWAY_PORT=3001
+Environment=BOT_INCOMING_URL=http://localhost:8000/incoming
+# Uncomment to add HuggingFace token:
+# Environment=HF_TOKEN=your_token_here
+
+[Install]
+WantedBy=multi-user.target
